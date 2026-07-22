@@ -1,0 +1,17 @@
+[project]
+name = "pipeline-record-monitor"
+version = "0.1.0"
+description = "A marimo notebook for monitoring records across data pipeline stages"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "marimo>=0.23.14",
+    "pandas>=2.3",
+    "sqlalchemy>=2.0",
+    "pyathena[sqlalchemy]>=3.0",
+    "botocore[crt]",
+    "psycopg2-binary>=2.9",
+]
+
+[tool.uv]
+package = false
