@@ -4,7 +4,7 @@ Interactive [marimo](https://marimo.io) notebooks that outer-join record keys ac
 
 ## Notebooks
 
-- `pipeline_monitor.py` — Amazon Athena through PyAthena.
+- `pipeline_monitor_athena.py` — Amazon Athena through PyAthena.
 - `pipeline_monitor_postgres.py` — PostgreSQL through psycopg2.
 
 Before running a notebook, edit its database-engine cell with the correct connection details. Do not commit real database passwords or other credentials.
@@ -26,7 +26,7 @@ uv run marimo edit pipeline_monitor_postgres.py
 Or open the Athena notebook:
 
 ```bash
-uv run marimo edit pipeline_monitor.py
+uv run marimo edit pipeline_monitor_athena.py
 ```
 
 Run either notebook as a read-only application by replacing `edit` with `run`.
