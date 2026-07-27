@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = "0.23.14"
-app = marimo.App(width="full")
+app = marimo.App(width="full", app_title="Sentinel")
 
 
 @app.cell
@@ -10,18 +10,6 @@ def _():
     import pipeline_monitor_backend as backend
 
     return backend, mo
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    # Pipeline record monitor
-
-    Compare records across **2–5 ordered stages**. Each stage may use its own
-    database schema and table, or a pandas DataFrame registered under the
-    **`notebook`** schema.
-    """)
-    return
 
 
 @app.cell
@@ -45,25 +33,6 @@ def _():
 
 
 @app.cell
-def _(mo):
-    mo.md(r"""
-    ## Notebook DataFrames
-
-    To make a pandas DataFrame available as a stage table, register it below.
-    Its schema will appear as **`notebook`** and the dictionary key will appear
-    in that stage's **Table** dropdown.
-
-    ```python
-    notebook_tables = {
-        "raw_events": raw_events_df,
-        "processed_events": processed_events_df,
-    }
-    ```
-    """)
-    return
-
-
-@app.cell
 def _():
     # Add DataFrames defined in this notebook, for example:
     # notebook_tables = {"raw_events": raw_events_df}
@@ -72,24 +41,8 @@ def _():
 
 
 @app.cell
-def _(backend, engine, mo):
+def _(backend, engine):
     catalog = backend.inspect_database(engine)
-    if catalog.error:
-        _status = mo.callout(
-            mo.md(
-                f"**Database metadata unavailable:** `{catalog.error}`  \n"
-                "You can still configure stages from the `notebook` schema."
-            ),
-            kind="warn",
-        )
-    else:
-        _status = mo.callout(
-            mo.md(
-                f"**Connected.** Found {len(catalog.schemas)} database schema(s)."
-            ),
-            kind="success",
-        )
-    _status
     return (catalog,)
 
 
@@ -102,7 +55,7 @@ def _(mo):
         allow_select_none=False,
         full_width=True,
     )
-    mo.vstack([mo.md("## 1. Choose the pipeline length"), stage_count])
+    mo.md("# Sentinel")
     return (stage_count,)
 
 
@@ -115,7 +68,7 @@ def _(backend, catalog, mo, stage_count):
             mo.ui.dropdown(
                 options=_schema_options,
                 value=_schema_default,
-                label="Schema",
+                label="",
                 searchable=True,
                 allow_select_none=False,
                 full_width=True,
@@ -127,13 +80,7 @@ def _(backend, catalog, mo, stage_count):
 
 
 @app.cell
-def _(
-    backend,
-    catalog,
-    mo,
-    notebook_tables,
-    stage_schema_selectors,
-):
+def _(backend, catalog, mo, notebook_tables, stage_schema_selectors):
     stage_table_errors = []
     stage_table_options = []
     for _position, _schema in enumerate(stage_schema_selectors.value, start=1):
@@ -153,7 +100,7 @@ def _(
             mo.ui.dropdown(
                 options=_tables,
                 value=_tables[0] if _tables else None,
-                label="Table",
+                label="",
                 searchable=True,
                 allow_select_none=True,
                 full_width=True,
@@ -162,7 +109,7 @@ def _(
             for _tables in stage_table_options
         ]
     )
-    return stage_table_errors, stage_table_options, stage_table_selectors
+    return stage_table_errors, stage_table_selectors
 
 
 @app.cell
@@ -195,7 +142,7 @@ def _(
             mo.ui.dropdown(
                 options=_columns,
                 value=backend.default_comparison_column(_columns),
-                label="Comparison key",
+                label="",
                 searchable=True,
                 allow_select_none=True,
                 full_width=True,
@@ -209,7 +156,7 @@ def _(
             mo.ui.dropdown(
                 options=_columns,
                 value=backend.default_timestamp_column(_columns),
-                label="Timestamp column",
+                label="",
                 searchable=True,
                 allow_select_none=True,
                 full_width=True,
@@ -220,7 +167,6 @@ def _(
     )
     return (
         stage_column_errors,
-        stage_column_options,
         stage_comparison_selectors,
         stage_timestamp_selectors,
     )
@@ -242,7 +188,7 @@ def _(mo):
         start=0,
         step=1,
         value=0,
-        label="Lookback days (0 means all records)",
+        label="Lookback days (0: all records)",
         full_width=True,
     )
     run_monitor = mo.ui.run_button(
@@ -262,75 +208,75 @@ def _(
     stage_count,
     stage_schema_selectors,
     stage_table_errors,
-    stage_table_options,
     stage_table_selectors,
     stage_timestamp_selectors,
 ):
-    _stage_cards = []
+    _field_headers = ["Schema", "Table", "Comparison key", "Timestamp"]
+    _header = mo.hstack(
+        [mo.md("**Stage**"), *[mo.md(f"**{name}**") for name in _field_headers]],
+        widths=[0.45, 1, 1.35, 1, 1],
+        align="end",
+        gap=0.5,
+    )
+    _rows = [_header]
     for _index in range(stage_count.value):
-        _source = mo.hstack(
-            [stage_schema_selectors[_index], stage_table_selectors[_index]],
-            widths="equal",
-            align="start",
-            gap=1,
-        )
-        _columns = mo.hstack(
-            [
-                stage_comparison_selectors[_index],
-                stage_timestamp_selectors[_index],
-            ],
-            widths="equal",
-            align="start",
-            gap=1,
-        )
-        _empty_hint = (
-            mo.callout(
-                "No tables are available. Register a DataFrame above or choose another schema.",
-                kind="info",
-            )
-            if not stage_table_options[_index]
-            else mo.md("")
-        )
-        _stage_cards.append(
-            mo.callout(
-                mo.vstack(
-                    [
-                        mo.md(f"### Stage {_index + 1}"),
-                        _source,
-                        _columns,
-                        _empty_hint,
-                    ],
-                    gap=1,
-                ),
-                kind="neutral",
+        _rows.append(
+            mo.hstack(
+                [
+                    mo.md(f"**{_index + 1}**"),
+                    stage_schema_selectors[_index],
+                    stage_table_selectors[_index],
+                    stage_comparison_selectors[_index],
+                    stage_timestamp_selectors[_index],
+                ],
+                widths=[0.45, 1, 1.35, 1, 1],
+                align="center",
+                gap=0.5,
             )
         )
+    _stage_layout = mo.vstack(_rows, gap=0.35)
 
     _metadata_errors = [
         _error
         for _error in [*stage_table_errors, *stage_column_errors]
         if _error
     ]
-    _error_display = (
-        mo.callout(mo.md("  \n".join(_metadata_errors)), kind="danger")
-        if _metadata_errors
-        else mo.md("")
+    _messages = []
+    if _metadata_errors:
+        _messages.append(
+            mo.callout(mo.md("  \n".join(_metadata_errors)), kind="danger")
+        )
+
+    _query_controls = mo.hstack(
+        [duplicate_policy, lookback_days, run_monitor],
+        widths=[1, 1, 0.8],
+        align="end",
+        gap=0.75,
     )
+    _left_aligned_query_controls = mo.hstack(
+        [_query_controls, mo.md("")],
+        widths="equal",
+        align="end",
+        gap=1,
+    )
+
     mo.vstack(
         [
-            mo.md("## 2. Configure each stage"),
-            *_stage_cards,
-            _error_display,
-            mo.md("## 3. Query settings"),
+            mo.md("---"),
+            mo.md("## Configure Stages"),
             mo.hstack(
-                [duplicate_policy, lookback_days],
-                widths="equal",
+                [stage_count, mo.md("")],
+                widths=[1, 5],
                 align="start",
                 gap=1,
             ),
-            run_monitor,
+            _stage_layout,
+            *_messages,
+            mo.md("---"),
+            mo.md("## Query Settings"),
+            _left_aligned_query_controls,
         ],
-        gap=1,
+        gap=0.75,
     )
     return
 
@@ -390,13 +336,12 @@ def _(backend, mo, monitor_error, monitor_ran, pipeline_result, stage_names):
             mo.md(f"**Monitor failed**\n\n{monitor_error}"), kind="danger"
         )
     elif not monitor_ran:
-        _results = mo.callout(
-            "Configure all stages, then select Run monitor.", kind="info"
-        )
+        _results = mo.md("")
     else:
         _results = mo.vstack(
             [
-                mo.md(f"## Results ({len(pipeline_result):,} records)"),
+                mo.md("---"),
+                mo.md("## Results"),
                 mo.ui.table(
                     pipeline_result,
                     style_cell=backend.make_complete_row_styler(
