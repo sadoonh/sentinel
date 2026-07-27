@@ -2,4 +2,3 @@
 __pycache__/
 __marimo__/
 *.py[cod]
-athena_notebook_*.py

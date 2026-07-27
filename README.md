@@ -1,4 +1,4 @@
-# Mosent pipeline record monitor
+# Sentinel
 
 Interactive [marimo](https://marimo.io) notebooks that outer-join record keys across 2–5 ordered data-pipeline stages. Each stage independently selects its schema, table, comparison key, and timestamp column. Results contain the comparison key, one timestamp column per stage, and an `exists_in` summary. Records present in every selected stage are highlighted in green.
 
