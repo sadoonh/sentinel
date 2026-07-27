@@ -55,7 +55,7 @@ def _(mo):
         allow_select_none=False,
         full_width=True,
     )
-    mo.md("# Sentinel")
+    mo.center(mo.md("# Sentinel"))
     return (stage_count,)
 
 
