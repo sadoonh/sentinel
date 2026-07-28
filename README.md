@@ -4,8 +4,8 @@ Interactive [marimo](https://marimo.io) notebooks that outer-join record keys ac
 
 ## Notebooks
 
-- `pipeline_monitor_athena.py` — Amazon Athena through PyAthena.
-- `pipeline_monitor_postgres.py` — PostgreSQL through psycopg2.
+- `sentinel_athena.py` — Amazon Athena through PyAthena.
+- `sentinel_postgres.py` — PostgreSQL through psycopg2.
 
 Before running a notebook, edit its database-engine cell with the correct connection details. Do not commit real database passwords or other credentials.
 
@@ -20,13 +20,13 @@ uv sync
 Open the PostgreSQL notebook:
 
 ```bash
-uv run marimo edit pipeline_monitor_postgres.py
+uv run marimo edit sentinel_postgres.py
 ```
 
 Or open the Athena notebook:
 
 ```bash
-uv run marimo edit pipeline_monitor_athena.py
+uv run marimo edit sentinel_athena.py
 ```
 
 Run either notebook as a read-only application by replacing `edit` with `run`.
@@ -34,11 +34,13 @@ Run either notebook as a read-only application by replacing `edit` with `run`.
 ## Behavior
 
 - Choose between 2 and 5 ordered stages.
-- For each stage, independently choose its schema, table, comparison key, and timestamp column.
+- Save, load, replace, and delete named monitor presets. Presets are stored locally in `.sentinel/presets.json` and do not include database credentials.
+- For each stage, independently choose its schema, table, comparison key, and timestamp column, with an optional custom stage name.
 - Mix database tables with pandas DataFrames registered in the notebook's `notebook_tables` dictionary. Registered frames appear under the reserved `notebook` schema.
 - Select the earliest or latest timestamp when a key occurs more than once.
 - Optionally restrict queries to a lookback window.
-- Outer-join stages so records that have not reached the final stage remain visible.
-- Download results as CSV.
+- Outer-join stages so records that have not reached the final stage remain visible. Result columns use a custom stage name when provided and otherwise use the table name.
 
-Shared catalog, validation, loading, merging, and styling functions live in `pipeline_monitor_backend.py`; the notebooks import them and contain only connection setup and UI orchestration. Database queries use SQLAlchemy reflection and expression objects rather than interpolated SQL identifiers. Comparison keys are normalized to pandas string values before stages are merged.
+Shared catalog, preset persistence, validation, loading, merging, and result styling functions live in `sentinel_backend.py`; the notebooks import them and contain only connection setup and UI orchestration. Database queries use SQLAlchemy reflection and expression objects rather than interpolated SQL identifiers. Comparison keys are normalized to pandas string values before stages are merged.
+
+The shared `sentinel.css` theme uses a restrained Swiss systems identity: a strict typographic hierarchy, neutral surfaces, sharp controls, and a functional red accent. The notebooks retain their compact native layout while sharing the same Sentinel title treatment.

@@ -1,16 +1,20 @@
-"""Backend operations shared by the pipeline-monitor marimo notebooks."""
+"""Backend operations shared by the Sentinel marimo notebooks."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import reduce
+import json
+from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import pandas as pd
 from sqlalchemy import MetaData, Table, func, inspect as sa_inspect, select
 
 NOTEBOOK_SCHEMA = "notebook"
+PRESET_FILE = Path(__file__).resolve().parent / ".sentinel" / "presets.json"
+PRESET_VERSION = 1
 _TIMESTAMP_CANDIDATES = (
     "ingestion_timestamp",
     "updated_at",
@@ -47,6 +51,131 @@ class PipelineValidationError(ValueError):
     def __init__(self, errors: Sequence[str]) -> None:
         self.errors = tuple(errors)
         super().__init__("\n".join(f"- {error}" for error in self.errors))
+
+
+@dataclass(frozen=True)
+class MonitorPresetStore:
+    """Saved monitor presets plus any non-fatal loading error."""
+
+    presets: dict[str, dict[str, Any]]
+    error: str | None = None
+
+
+def load_monitor_presets(path: Path = PRESET_FILE) -> MonitorPresetStore:
+    """Load local monitor presets without making a corrupt file break the app."""
+    if not path.exists():
+        return MonitorPresetStore({})
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("version") != PRESET_VERSION:
+            raise ValueError(
+                f"Unsupported preset version: {payload.get('version')!r}."
+            )
+        raw_presets = payload.get("presets")
+        if not isinstance(raw_presets, dict):
+            raise ValueError("The preset file must contain a `presets` object.")
+
+        presets: dict[str, dict[str, Any]] = {}
+        for name, config in raw_presets.items():
+            if not isinstance(name, str) or not isinstance(config, dict):
+                raise ValueError("Every preset must have a name and configuration.")
+            presets[name] = config
+        return MonitorPresetStore(dict(sorted(presets.items())))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return MonitorPresetStore({}, str(exc))
+
+
+def make_monitor_preset(
+    *,
+    stages: Sequence[Mapping[str, Any]],
+    duplicate_policy: str,
+    lookback_days: int | float,
+) -> dict[str, Any]:
+    """Build the serializable portion of a monitor configuration."""
+    return {
+        "stages": [
+            {
+                "stage_name": stage.get("stage_name", ""),
+                "schema": stage.get("schema"),
+                "table": stage.get("table"),
+                "comparison_column": stage.get("comparison_column"),
+                "timestamp_column": stage.get("timestamp_column"),
+            }
+            for stage in stages
+        ],
+        "duplicate_policy": duplicate_policy,
+        "lookback_days": lookback_days,
+    }
+
+
+def _write_monitor_presets(
+    presets: Mapping[str, Mapping[str, Any]], path: Path
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": PRESET_VERSION,
+        "presets": dict(sorted(presets.items())),
+    }
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    temporary_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(path)
+
+
+def save_monitor_preset(
+    name: str,
+    config: Mapping[str, Any],
+    path: Path = PRESET_FILE,
+) -> MonitorPresetStore:
+    """Create or replace a named preset in the local preset file."""
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("Enter a preset name before saving.")
+    if len(clean_name) > 80:
+        raise ValueError("Preset names must be 80 characters or fewer.")
+
+    store = load_monitor_presets(path)
+    if store.error:
+        raise ValueError(f"Cannot update the preset file: {store.error}")
+    presets = dict(store.presets)
+    presets[clean_name] = dict(config)
+    _write_monitor_presets(presets, path)
+    return MonitorPresetStore(dict(sorted(presets.items())))
+
+
+def delete_monitor_preset(
+    name: str, path: Path = PRESET_FILE
+) -> MonitorPresetStore:
+    """Delete a named preset if it exists."""
+    store = load_monitor_presets(path)
+    if store.error:
+        raise ValueError(f"Cannot update the preset file: {store.error}")
+    presets = dict(store.presets)
+    presets.pop(name, None)
+    _write_monitor_presets(presets, path)
+    return MonitorPresetStore(dict(sorted(presets.items())))
+
+
+def preset_stages(config: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Return a defensive copy of valid-looking stages from a preset."""
+    if not config:
+        return []
+    stages = config.get("stages", [])
+    if not isinstance(stages, list):
+        return []
+    return [dict(stage) for stage in stages if isinstance(stage, dict)]
+
+
+def dropdown_label_for_value(
+    options: Mapping[str, Any], desired: Any, fallback: str
+) -> str:
+    """Find the dropdown label whose submitted value matches a preset value."""
+    return next(
+        (label for label, value in options.items() if value == desired), fallback
+    )
 
 
 def inspect_database(engine: Any | None) -> DatabaseCatalog:
@@ -139,8 +268,11 @@ def default_comparison_column(columns: Sequence[Any]) -> Any | None:
     return _preferred_column(columns, _COMPARISON_CANDIDATES)
 
 
-def _stage_name(position: int, schema: str, table_name: str) -> str:
-    return f"Stage {position}: {schema}.{table_name}"
+def _stage_name(stage: Mapping[str, Any]) -> str:
+    custom_name = stage.get("stage_name")
+    if isinstance(custom_name, str) and custom_name.strip():
+        return custom_name.strip()
+    return str(stage.get("table") or "")
 
 
 def _validate_stages(
@@ -159,10 +291,15 @@ def _validate_stages(
         errors.append("Lookback days cannot be negative.")
 
     for position, stage in enumerate(stages, start=1):
+        stage_name = stage.get("stage_name", "")
         schema = stage.get("schema")
         table_name = stage.get("table")
         comparison_column = stage.get("comparison_column")
         timestamp_column = stage.get("timestamp_column")
+        if not isinstance(stage_name, str):
+            errors.append(f"Stage {position} name must be text.")
+        elif len(stage_name.strip()) > 80:
+            errors.append(f"Stage {position} name must be 80 characters or fewer.")
         if not schema:
             errors.append(f"Stage {position} needs a schema.")
         if not table_name:
@@ -188,6 +325,17 @@ def _validate_stages(
                 )
         elif schema and schema != NOTEBOOK_SCHEMA and engine is None:
             errors.append(f"Stage {position} uses a database table, but no engine is configured.")
+
+    result_names = [_stage_name(stage) for stage in stages]
+    duplicate_names = sorted(
+        {name for name in result_names if name and result_names.count(name) > 1}
+    )
+    if duplicate_names:
+        errors.append(
+            "Result stage names must be unique. Add custom names for: "
+            + ", ".join(f"`{name}`" for name in duplicate_names)
+            + "."
+        )
 
     if errors:
         raise PipelineValidationError(errors)
@@ -285,10 +433,7 @@ def run_pipeline(
         engine, stages, notebook_tables, duplicate_policy, lookback_days
     )
 
-    stage_names = [
-        _stage_name(position, stage["schema"], stage["table"])
-        for position, stage in enumerate(stages, start=1)
-    ]
+    stage_names = [_stage_name(stage) for stage in stages]
     stage_frames: list[pd.DataFrame] = []
     marker_columns: list[str] = []
 
@@ -358,7 +503,7 @@ def make_complete_row_styler(
 
     def style_cell(row_id: str, _column_name: str, _value: Any) -> dict[str, str]:
         if row_id in complete_row_ids:
-            return {"backgroundColor": "rgba(34, 197, 94, 0.22)"}
+            return {"backgroundColor": "rgba(52, 211, 153, 0.22)"}
         return {}
 
     return style_cell
