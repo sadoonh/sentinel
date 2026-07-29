@@ -289,7 +289,7 @@ def _(backend, mo, selected_preset):
         "Latest timestamp": "latest",
         "Earliest timestamp": "earliest",
     }
-    duplicate_policy = mo.ui.dropdown(
+    duplicate_policy = mo.ui.radio(
         options=_duplicate_options,
         value=backend.dropdown_label_for_value(
             _duplicate_options,
@@ -297,22 +297,27 @@ def _(backend, mo, selected_preset):
             "Latest timestamp",
         ),
         label="Duplicate handling",
-        allow_select_none=False,
-        full_width=True,
+        inline=False,
     )
     _saved_lookback = selected_preset.get("lookback_days", 0) if selected_preset else 0
     _lookback_value = (
-        _saved_lookback if isinstance(_saved_lookback, (int, float)) else 0
+        int(_saved_lookback)
+        if isinstance(_saved_lookback, (int, float))
+        else 0
     )
     lookback_days = mo.ui.number(
         start=0,
         step=1,
         value=_lookback_value,
-        label="Lookback days (0: all records)",
+        label="Lookback days",
         full_width=True,
     )
     run_monitor = mo.ui.run_button(
-        label="Run monitor", kind="success", full_width=True
+        label="Run monitor",
+        kind="success",
+        tooltip="Run monitor (Ctrl+Enter)",
+        full_width=False,
+        keyboard_shortcut="Ctrl-Enter",
     )
     return duplicate_policy, lookback_days, run_monitor
 
@@ -491,14 +496,19 @@ def _(
         align="end",
         gap=0.75,
     )
-    _preset_panel = mo.vstack(
-        [
-            mo.md("## Saved Monitors"),
-            mo.md("Load a configuration or save the current stage setup for later."),
-            _preset_controls,
-            *_preset_messages,
-        ],
-        gap=0.65,
+    _preset_panel = mo.accordion(
+        {
+            "Saved Monitors": mo.vstack(
+                [
+                    mo.md(
+                        "Load a configuration or save the current stage setup for later."
+                    ),
+                    _preset_controls,
+                    *_preset_messages,
+                ],
+                gap=0.65,
+            )
+        }
     ).style(
         {
             "background": "var(--sentinel-panel)",
@@ -508,9 +518,23 @@ def _(
         }
     )
 
+    _query_panel_style = {
+        "background": "var(--sentinel-panel)",
+        "border": "1px solid var(--sentinel-border)",
+        "border-radius": "10px",
+        "box-sizing": "border-box",
+        "min-height": "7rem",
+        "padding": "0.8rem 0.9rem",
+    }
+    _duplicate_policy_panel = mo.vstack([duplicate_policy]).style(
+        _query_panel_style
+    )
+    _lookback_days_panel = mo.vstack([lookback_days]).style(
+        _query_panel_style
+    )
     _query_controls = mo.hstack(
-        [duplicate_policy, lookback_days, run_monitor],
-        widths=[1, 1, 0.8],
+        [_duplicate_policy_panel, _lookback_days_panel, run_monitor],
+        widths=[1, 1, 0.5],
         align="end",
         gap=0.75,
     )
@@ -523,9 +547,7 @@ def _(
 
     mo.vstack(
         [
-            mo.md("---"),
             _preset_panel,
-            mo.md("---"),
             mo.md("## Configure Stages"),
             mo.hstack(
                 [stage_count, mo.md("")],
@@ -604,16 +626,24 @@ def _(backend, mo, monitor_error, monitor_ran, pipeline_result, stage_names):
     elif not monitor_ran:
         _results = mo.md("")
     else:
+        _result_table = mo.ui.table(
+            pipeline_result,
+            freeze_columns_left=["compare_column"],
+            style_cell=backend.make_complete_row_styler(
+                pipeline_result, stage_names
+            ),
+        )
+        _result_views = mo.ui.tabs(
+            {
+                "Table": _result_table,
+                "Visualize": mo.ui.data_explorer(pipeline_result),
+            }
+        )
         _results = mo.vstack(
             [
                 mo.md("---"),
                 mo.md("## Results"),
-                mo.ui.table(
-                    pipeline_result,
-                    style_cell=backend.make_complete_row_styler(
-                        pipeline_result, stage_names
-                    ),
-                ),
+                _result_views,
             ]
         )
     _results
