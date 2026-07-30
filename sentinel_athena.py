@@ -643,10 +643,27 @@ def _(backend, mo, monitor_error, monitor_ran, pipeline_result, stage_names):
                 "Visualize": mo.ui.data_explorer(pipeline_result),
             }
         )
+        _scroll_to_results = mo.iframe(
+            """
+            <script>
+              window.setTimeout(() => {
+                const results = window.parent.document.getElementById(
+                  "sentinel-results"
+                );
+                results?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }, 0);
+            </script>
+            """,
+            width="0",
+            height="0",
+        )
+        _results_heading = mo.Html(
+            f'<h2 id="sentinel-results" tabindex="-1">Results</h2>{_scroll_to_results}'
+        )
         _results = mo.vstack(
             [
                 mo.md("---"),
-                mo.md("## Results"),
+                _results_heading,
                 _result_views,
             ]
         )
