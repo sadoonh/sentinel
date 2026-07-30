@@ -88,7 +88,7 @@ hr {
   border-color: var(--sentinel-border);
 }
 
-button:not([role="radio"]) {
+marimo-button button:not([role="radio"]) {
   border-radius: 2px !important;
 }
 

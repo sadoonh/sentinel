@@ -137,6 +137,10 @@ Stages should be ordered from the beginning of the pipeline to the end.
    - **Schema:** The schema containing the table.
    - **Table:** The table representing this pipeline stage.
    - **Comparison key:** The column that identifies the same logical record between stages, such as `record_id` or `transaction_id`. Column names may differ between stages, but their values must identify the same records.
+   - **Key handling:** How Sentinel prepares that stage's comparison keys:
+     - **Exact** preserves the current case, spacing, path, and extension.
+     - **Normalize text** trims whitespace, normalizes Unicode and repeated spaces, and ignores letter case.
+     - **Normalize filename** also removes directory paths and common file extensions. For example, `incoming/Report_123.CSV.GZ` becomes `report_123`.
    - **Timestamp:** The column showing when the record reached or was processed by that stage.
 3. Make sure each stage has a unique stage name. This is especially important when two stages use tables with the same name.
 
@@ -150,6 +154,7 @@ Under **Query Settings**:
   - **Latest timestamp** keeps the most recent timestamp.
   - **Earliest timestamp** keeps the oldest timestamp.
 - **Lookback days** limits each stage to recent records based on its selected timestamp column. Enter `0` to include all available records.
+- **Mismatched records** shows only records missing from one or more configured stages when switched on. Leave it off to show all records.
 
 Select **Run monitor**, or use `Ctrl+Enter`. Sentinel runs the queries and scrolls to the results when they are ready.
 
@@ -162,6 +167,8 @@ The **Table** tab contains:
 - `exists_in`: the stages in which the record was found.
 
 Sentinel outer-joins the stages, so records missing from later stages remain visible. A missing stage timestamp indicates that Sentinel did not find that key in that stage. Green rows are records found in every configured stage.
+
+When normalization causes multiple raw keys in one stage to produce the same comparison key, Sentinel applies the selected duplicate-handling rule and displays a **Key matching notice** with examples. Review these notices to ensure distinct records were not combined unintentionally.
 
 Use the **Visualize** tab for interactive exploration of the result data.
 
@@ -183,5 +190,7 @@ Presets are stored locally in `.sentinel/presets.json`. They include stage and q
 - **Athena authentication fails:** Confirm that AWS credentials are available in the same terminal where Sentinel was started and that the region and permissions are correct.
 - **A stage reports missing fields:** Select a schema, table, comparison key, and timestamp for every stage.
 - **Duplicate stage-name error:** Enter unique optional stage names for tables that would otherwise produce the same result-column name.
+- **Keys differ only by filename extension or path:** Select **Normalize filename** for the affected stages.
+- **A key matching notice appears:** Review the listed raw values. Use **Exact** or a less aggressive strategy if they represent different records.
 - **Expected older records are missing:** Set **Lookback days** to `0` and run the monitor again.
 - **The browser page closes or stops responding:** Check that the terminal process is still running and reopen the local URL printed there.

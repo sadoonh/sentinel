@@ -7,7 +7,9 @@ from datetime import datetime, timedelta
 from functools import reduce
 import json
 from pathlib import Path
+import re
 from typing import Any, Callable, Mapping, Sequence
+import unicodedata
 
 import pandas as pd
 from sqlalchemy import MetaData, Table, func, inspect as sa_inspect, select
@@ -32,6 +34,28 @@ _COMPARISON_CANDIDATES = (
     "transaction_id",
     "file_name",
     "key",
+)
+KEY_NORMALIZATION_OPTIONS = {
+    "Exact": "exact",
+    "Normalize text": "text",
+    "Normalize filename": "filename",
+}
+_KEY_NORMALIZATION_STRATEGIES = frozenset(KEY_NORMALIZATION_OPTIONS.values())
+_FILE_SUFFIXES = (
+    ".parquet",
+    ".jsonl",
+    ".avro",
+    ".xlsx",
+    ".csv",
+    ".json",
+    ".xml",
+    ".txt",
+    ".xls",
+    ".zip",
+    ".bz2",
+    ".tar",
+    ".gz",
+    ".xz",
 )
 
 
@@ -91,6 +115,7 @@ def make_monitor_preset(
     stages: Sequence[Mapping[str, Any]],
     duplicate_policy: str,
     lookback_days: int | float,
+    mismatched_records_only: bool = False,
 ) -> dict[str, Any]:
     """Build the serializable portion of a monitor configuration."""
     return {
@@ -101,11 +126,13 @@ def make_monitor_preset(
                 "table": stage.get("table"),
                 "comparison_column": stage.get("comparison_column"),
                 "timestamp_column": stage.get("timestamp_column"),
+                "key_normalization": stage.get("key_normalization", "exact"),
             }
             for stage in stages
         ],
         "duplicate_policy": duplicate_policy,
         "lookback_days": lookback_days,
+        "mismatched_records_only": mismatched_records_only,
     }
 
 
@@ -268,6 +295,38 @@ def default_comparison_column(columns: Sequence[Any]) -> Any | None:
     return _preferred_column(columns, _COMPARISON_CANDIDATES)
 
 
+def key_normalization_options() -> dict[str, str]:
+    """Return user-facing key-normalization labels and stored values."""
+    return dict(KEY_NORMALIZATION_OPTIONS)
+
+
+def normalize_comparison_key(value: Any, strategy: str = "exact") -> Any:
+    """Normalize one comparison key using a deterministic strategy."""
+    if pd.isna(value):
+        return pd.NA
+
+    text = str(value)
+    if strategy == "exact":
+        return text
+    if strategy not in _KEY_NORMALIZATION_STRATEGIES:
+        raise ValueError(f"Unsupported key normalization strategy: {strategy!r}.")
+
+    normalized = unicodedata.normalize("NFKC", text).strip().casefold()
+    normalized = re.sub(r"\s+", " ", normalized)
+    if strategy == "filename":
+        normalized = normalized.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+        while normalized:
+            matching_suffix = next(
+                (suffix for suffix in _FILE_SUFFIXES if normalized.endswith(suffix)),
+                None,
+            )
+            if matching_suffix is None:
+                break
+            normalized = normalized[: -len(matching_suffix)]
+
+    return normalized or pd.NA
+
+
 def _stage_name(stage: Mapping[str, Any]) -> str:
     custom_name = stage.get("stage_name")
     if isinstance(custom_name, str) and custom_name.strip():
@@ -296,6 +355,7 @@ def _validate_stages(
         table_name = stage.get("table")
         comparison_column = stage.get("comparison_column")
         timestamp_column = stage.get("timestamp_column")
+        key_normalization = stage.get("key_normalization", "exact")
         if not isinstance(stage_name, str):
             errors.append(f"Stage {position} name must be text.")
         elif len(stage_name.strip()) > 80:
@@ -308,6 +368,10 @@ def _validate_stages(
             errors.append(f"Stage {position} needs a comparison key.")
         if timestamp_column is None:
             errors.append(f"Stage {position} needs a timestamp column.")
+        if key_normalization not in _KEY_NORMALIZATION_STRATEGIES:
+            errors.append(
+                f"Stage {position} has an unsupported key normalization strategy."
+            )
 
         if schema == NOTEBOOK_SCHEMA and table_name:
             frame = notebook_tables.get(table_name)
@@ -413,6 +477,59 @@ def _load_notebook_stage(
     return frame
 
 
+def _short_key_repr(value: Any, limit: int = 80) -> str:
+    rendered = repr(value)
+    return rendered if len(rendered) <= limit else f"{rendered[: limit - 1]}…"
+
+
+def _prepare_stage_keys(
+    frame: pd.DataFrame,
+    *,
+    stage_name: str,
+    output_name: str,
+    marker_name: str,
+    strategy: str,
+    duplicate_policy: str,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Normalize stage keys, re-aggregate duplicates, and report collisions."""
+    prepared = frame.copy()
+    prepared["__raw_compare_column"] = prepared["compare_column"].astype("string")
+    prepared["compare_column"] = prepared["__raw_compare_column"].map(
+        lambda value: normalize_comparison_key(value, strategy)
+    )
+    prepared = prepared.dropna(subset=["compare_column"])
+
+    warnings: list[str] = []
+    if strategy != "exact" and not prepared.empty:
+        variants = prepared.groupby("compare_column", sort=False)[
+            "__raw_compare_column"
+        ].agg(lambda values: tuple(dict.fromkeys(str(value) for value in values)))
+        collisions = variants[variants.map(len) > 1]
+        if not collisions.empty:
+            examples = []
+            for canonical, raw_values in collisions.head(3).items():
+                displayed_values = ", ".join(
+                    _short_key_repr(value) for value in raw_values[:3]
+                )
+                examples.append(
+                    f"{_short_key_repr(canonical)} from {displayed_values}"
+                )
+            warnings.append(
+                f"{stage_name}: {strategy} normalization combined "
+                f"{len(collisions)} canonical key(s). Review: "
+                + "; ".join(examples)
+            )
+
+    aggregate = "max" if duplicate_policy == "latest" else "min"
+    prepared = (
+        prepared.groupby("compare_column", as_index=False, sort=False)[output_name]
+        .agg(aggregate)
+        .reset_index(drop=True)
+    )
+    prepared[marker_name] = True
+    return prepared, warnings
+
+
 def empty_pipeline_result(stage_names: Sequence[str] = ()) -> pd.DataFrame:
     """Create an empty result with the same columns as a completed run."""
     return pd.DataFrame(columns=["compare_column", *stage_names, "exists_in"])
@@ -436,6 +553,7 @@ def run_pipeline(
     stage_names = [_stage_name(stage) for stage in stages]
     stage_frames: list[pd.DataFrame] = []
     marker_columns: list[str] = []
+    matching_warnings: list[str] = []
 
     for position, (stage, output_name) in enumerate(
         zip(stages, stage_names), start=1
@@ -464,7 +582,16 @@ def run_pipeline(
                 duplicate_policy=duplicate_policy,
                 lookback_days=lookback_days,
             )
+        frame, stage_warnings = _prepare_stage_keys(
+            frame,
+            stage_name=output_name,
+            output_name=output_name,
+            marker_name=marker_name,
+            strategy=stage.get("key_normalization", "exact"),
+            duplicate_policy=duplicate_policy,
+        )
         stage_frames.append(frame)
+        matching_warnings.extend(stage_warnings)
 
     merged = reduce(
         lambda left, right: left.merge(
@@ -485,7 +612,26 @@ def run_pipeline(
         .sort_values("compare_column", kind="stable")
         .reset_index(drop=True)
     )
+    result.attrs["matching_warnings"] = matching_warnings
     return result, stage_names
+
+
+def filter_mismatched_records(
+    result: pd.DataFrame, stage_names: Sequence[str]
+) -> pd.DataFrame:
+    """Return records missing from at least one stage with a clean row index."""
+    expected = ", ".join(stage_names)
+    exists_in = result.get(
+        "exists_in", pd.Series("", index=result.index, dtype="string")
+    ).fillna("")
+    complete_rows = (
+        exists_in.eq(expected)
+        if expected
+        else pd.Series(False, index=result.index, dtype="bool")
+    )
+    filtered = result.loc[~complete_rows].reset_index(drop=True)
+    filtered.attrs = result.attrs.copy()
+    return filtered
 
 
 def make_complete_row_styler(
