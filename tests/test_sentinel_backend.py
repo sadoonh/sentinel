@@ -93,6 +93,32 @@ class PipelineKeyMatchingTests(unittest.TestCase):
         self.assertEqual(result.loc[0, "compare_column"], "report_123")
         self.assertEqual(result.loc[0, "exists_in"], "source, target")
 
+    def test_drilldown_loads_full_rows_from_each_matching_stage(self):
+        self.notebook_tables["source"]["detail"] = ["source detail"]
+        self.notebook_tables["target"]["detail"] = ["target detail"]
+        stages = [
+            self.stage("source", "source", "filename"),
+            self.stage("target", "target", "filename"),
+        ]
+        result, _ = backend.run_pipeline(
+            engine=None,
+            stages=stages,
+            notebook_tables=self.notebook_tables,
+        )
+
+        drilldown = backend.load_record_drilldown(
+            engine=None,
+            stages=stages,
+            notebook_tables=self.notebook_tables,
+            pipeline_result=result,
+            compare_key="report_123",
+        )
+
+        self.assertEqual(list(drilldown), ["source", "target"])
+        self.assertEqual(drilldown["source"].loc[0, "detail"], "source detail")
+        self.assertEqual(drilldown["target"].loc[0, "detail"], "target detail")
+        self.assertIsInstance(drilldown["source"].index, pd.RangeIndex)
+
     def test_normalization_collisions_are_aggregated_and_reported(self):
         self.notebook_tables["source"] = pd.DataFrame(
             {

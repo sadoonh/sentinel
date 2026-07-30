@@ -1,11 +1,7 @@
 import marimo
 
 __generated_with = "0.23.14"
-app = marimo.App(
-    width="full",
-    app_title="Sentinel",
-    css_file="sentinel.css",
-)
+app = marimo.App(width="full", app_title="Sentinel", css_file="sentinel.css")
 
 
 @app.cell
@@ -67,12 +63,7 @@ def _(backend, mo):
 
 
 @app.cell
-def _(
-    get_active_preset_name,
-    get_preset_store,
-    mo,
-    set_active_preset_name,
-):
+def _(get_active_preset_name, get_preset_store, mo, set_active_preset_name):
     preset_store = get_preset_store()
     _active_name = get_active_preset_name()
     _options = {"New monitor": "", **{name: name for name in preset_store.presets}}
@@ -397,7 +388,12 @@ def _(backend, mo, selected_preset):
         full_width=False,
         keyboard_shortcut="Ctrl-Enter",
     )
-    return duplicate_policy, lookback_days, mismatched_records_only, run_monitor
+    return (
+        duplicate_policy,
+        lookback_days,
+        mismatched_records_only,
+        run_monitor,
+    )
 
 
 @app.cell
@@ -684,14 +680,17 @@ def _(
     stage_timestamp_selectors,
 ):
     monitor_error = None
+    monitor_lookback_days = 0
     monitor_ran = False
+    monitor_stages = []
     monitor_warnings = []
     stage_names = []
     pipeline_result = backend.empty_pipeline_result()
 
     if run_monitor.value:
+        monitor_lookback_days = lookback_days.value
         monitor_ran = True
-        _stages = [
+        monitor_stages = [
             {
                 "stage_name": _custom_name,
                 "schema": _schema,
@@ -719,28 +718,136 @@ def _(
         try:
             pipeline_result, stage_names = backend.run_pipeline(
                 engine=engine,
-                stages=_stages,
+                stages=monitor_stages,
                 notebook_tables=notebook_tables,
                 duplicate_policy=duplicate_policy.value,
-                lookback_days=lookback_days.value,
+                lookback_days=monitor_lookback_days,
             )
             monitor_warnings = pipeline_result.attrs.get("matching_warnings", [])
         except Exception as _exc:
             monitor_error = str(_exc)
             pipeline_result = backend.empty_pipeline_result()
-    return monitor_error, monitor_ran, monitor_warnings, pipeline_result, stage_names
+    return (
+        monitor_error,
+        monitor_lookback_days,
+        monitor_ran,
+        monitor_stages,
+        monitor_warnings,
+        pipeline_result,
+        stage_names,
+    )
+
+
+@app.cell
+def _(mo, monitor_ran, pipeline_result):
+    if monitor_ran:
+        import time as _time
+
+        _scroll_token = str(_time.time_ns())
+        _scroll_to_results = mo.iframe(
+            f"""
+            <script>
+              const token = "{_scroll_token}";
+              const marker = "__sentinel_scroll_token";
+              if (window.parent[marker] !== token) {{
+                window.parent[marker] = token;
+                let attempts = 0;
+                const scrollToResults = () => {{
+                  const results = window.parent.document.getElementById(
+                    "sentinel-results"
+                  );
+                  if (results) {{
+                    results.scrollIntoView({{ behavior: "smooth", block: "start" }});
+                  }} else if (attempts++ < 20) {{
+                    window.setTimeout(scrollToResults, 50);
+                  }}
+                }};
+                window.setTimeout(scrollToResults, 0);
+              }}
+            </script>
+            """,
+            width="0",
+            height="0",
+        )
+    else:
+        _scroll_to_results = mo.md("")
+    _ = len(pipeline_result)
+    _scroll_to_results
+    return
+
+
+@app.cell
+def _(backend, mismatched_records_only, mo, pipeline_result, stage_names):
+    visible_result = (
+        backend.filter_mismatched_records(pipeline_result, stage_names)
+        if mismatched_records_only.value
+        else pipeline_result
+    )
+    result_table = mo.ui.table(
+        visible_result,
+        selection="single",
+        freeze_columns_left=["compare_column"],
+        style_cell=backend.make_complete_row_styler(visible_result, stage_names),
+    )
+    return result_table, visible_result
+
+
+@app.cell
+def _(mo, monitor_ran, result_table):
+    drilldown_button = mo.ui.run_button(
+        label="Drill down",
+        tooltip="Show the selected record in its source tables",
+        disabled=not monitor_ran or result_table.value.empty,
+    )
+    return (drilldown_button,)
 
 
 @app.cell
 def _(
     backend,
-    mismatched_records_only,
+    drilldown_button,
+    engine,
+    monitor_lookback_days,
+    monitor_stages,
+    notebook_tables,
+    pipeline_result,
+    result_table,
+):
+    drilldown_error = None
+    drilldown_ran = False
+    drilldown_rows = {}
+    if drilldown_button.value:
+        drilldown_ran = True
+        _selection = result_table.value
+        if len(_selection) != 1:
+            drilldown_error = "Select one result row before drilling down."
+        else:
+            try:
+                drilldown_rows = backend.load_record_drilldown(
+                    engine=engine,
+                    stages=monitor_stages,
+                    notebook_tables=notebook_tables,
+                    pipeline_result=pipeline_result,
+                    compare_key=_selection.iloc[0]["compare_column"],
+                    lookback_days=monitor_lookback_days,
+                )
+            except Exception as _exc:
+                drilldown_error = str(_exc)
+    return drilldown_error, drilldown_ran, drilldown_rows
+
+
+@app.cell
+def _(
+    drilldown_button,
+    drilldown_error,
+    drilldown_ran,
+    drilldown_rows,
     mo,
     monitor_error,
     monitor_ran,
     monitor_warnings,
-    pipeline_result,
-    stage_names,
+    result_table,
+    visible_result,
 ):
     if monitor_error:
         _results = mo.callout(
@@ -749,40 +856,44 @@ def _(
     elif not monitor_ran:
         _results = mo.md("")
     else:
-        _visible_result = (
-            backend.filter_mismatched_records(pipeline_result, stage_names)
-            if mismatched_records_only.value
-            else pipeline_result
-        )
-        _result_table = mo.ui.table(
-            _visible_result,
-            freeze_columns_left=["compare_column"],
-            style_cell=backend.make_complete_row_styler(
-                _visible_result, stage_names
-            ),
+        if drilldown_error:
+            _drilldown_view = mo.callout(
+                mo.md(f"**Drilldown failed**\n\n{drilldown_error}"), kind="danger"
+            )
+        elif drilldown_ran and drilldown_rows:
+            _drilldown_view = mo.ui.tabs(
+                {
+                    _stage_name: mo.ui.table(_rows, selection=None)
+                    for _stage_name, _rows in drilldown_rows.items()
+                }
+            )
+        elif drilldown_ran:
+            _drilldown_view = mo.callout(
+                mo.md("No matching source rows were found."), kind="warn"
+            )
+        else:
+            _drilldown_view = mo.md("")
+
+        _table_view = mo.vstack(
+            [
+                result_table,
+                mo.hstack(
+                    [drilldown_button, mo.md("")],
+                    widths=[0.5, 4.5],
+                    align="start",
+                ),
+                _drilldown_view,
+            ],
+            gap=0.75,
         )
         _result_views = mo.ui.tabs(
             {
-                "Table": _result_table,
-                "Visualize": mo.ui.data_explorer(_visible_result),
+                "Table": _table_view,
+                "Visualize": mo.ui.data_explorer(visible_result),
             }
         )
-        _scroll_to_results = mo.iframe(
-            """
-            <script>
-              window.setTimeout(() => {
-                const results = window.parent.document.getElementById(
-                  "sentinel-results"
-                );
-                results?.scrollIntoView({ behavior: "smooth", block: "start" });
-              }, 0);
-            </script>
-            """,
-            width="0",
-            height="0",
-        )
         _results_heading = mo.Html(
-            f'<h2 id="sentinel-results" tabindex="-1">Results</h2>{_scroll_to_results}'
+            '<h2 id="sentinel-results" tabindex="-1">Results</h2>'
         )
         _matching_notice = (
             mo.callout(

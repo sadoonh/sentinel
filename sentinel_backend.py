@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping, Sequence
 import unicodedata
 
 import pandas as pd
-from sqlalchemy import MetaData, Table, func, inspect as sa_inspect, select
+from sqlalchemy import MetaData, String, Table, cast, func, inspect as sa_inspect, select
 
 NOTEBOOK_SCHEMA = "notebook"
 PRESET_FILE = Path(__file__).resolve().parent / ".sentinel" / "presets.json"
@@ -492,7 +492,7 @@ def _prepare_stage_keys(
     marker_name: str,
     strategy: str,
     duplicate_policy: str,
-) -> tuple[pd.DataFrame, list[str]]:
+) -> tuple[pd.DataFrame, list[str], dict[str, tuple[str, ...]]]:
     """Normalize stage keys, re-aggregate duplicates, and report collisions."""
     prepared = frame.copy()
     prepared["__raw_compare_column"] = prepared["compare_column"].astype("string")
@@ -501,11 +501,15 @@ def _prepare_stage_keys(
     )
     prepared = prepared.dropna(subset=["compare_column"])
 
+    variants = prepared.groupby("compare_column", sort=False)[
+        "__raw_compare_column"
+    ].agg(lambda values: tuple(dict.fromkeys(str(value) for value in values)))
+    raw_key_values = {
+        str(canonical): raw_values for canonical, raw_values in variants.items()
+    }
+
     warnings: list[str] = []
-    if strategy != "exact" and not prepared.empty:
-        variants = prepared.groupby("compare_column", sort=False)[
-            "__raw_compare_column"
-        ].agg(lambda values: tuple(dict.fromkeys(str(value) for value in values)))
+    if strategy != "exact" and not variants.empty:
         collisions = variants[variants.map(len) > 1]
         if not collisions.empty:
             examples = []
@@ -529,7 +533,95 @@ def _prepare_stage_keys(
         .reset_index(drop=True)
     )
     prepared[marker_name] = True
-    return prepared, warnings
+    return prepared, warnings, raw_key_values
+
+
+def _load_database_record_rows(
+    *,
+    engine: Any,
+    schema: str,
+    table_name: str,
+    comparison_column: str,
+    timestamp_column: str,
+    raw_keys: Sequence[str],
+    lookback_days: int | float,
+) -> pd.DataFrame:
+    metadata = MetaData()
+    source = Table(table_name, metadata, schema=schema, autoload_with=engine)
+    statement = select(source).where(
+        cast(source.c[comparison_column], String).in_(list(raw_keys))
+    )
+    if lookback_days > 0:
+        cutoff = datetime.now() - timedelta(days=int(lookback_days))
+        statement = statement.where(source.c[timestamp_column] >= cutoff)
+
+    with engine.connect() as connection:
+        result = connection.execute(statement)
+        return pd.DataFrame(result.fetchall(), columns=result.keys()).reset_index(
+            drop=True
+        )
+
+
+def _load_notebook_record_rows(
+    *,
+    source: pd.DataFrame,
+    comparison_column: Any,
+    timestamp_column: Any,
+    raw_keys: Sequence[str],
+    lookback_days: int | float,
+) -> pd.DataFrame:
+    raw_comparison = source[comparison_column].astype("string")
+    frame = source.loc[raw_comparison.isin(raw_keys)].copy()
+    if lookback_days > 0:
+        parsed_timestamps = pd.to_datetime(
+            frame[timestamp_column], errors="coerce", utc=True
+        )
+        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=int(lookback_days))
+        frame = frame.loc[parsed_timestamps >= cutoff]
+    return frame.reset_index(drop=True)
+
+
+def load_record_drilldown(
+    *,
+    engine: Any | None,
+    stages: Sequence[Mapping[str, Any]],
+    notebook_tables: Mapping[str, pd.DataFrame],
+    pipeline_result: pd.DataFrame,
+    compare_key: Any,
+    lookback_days: int | float = 0,
+) -> dict[str, pd.DataFrame]:
+    """Load full source rows for one normalized pipeline result key."""
+    stage_key_values = pipeline_result.attrs.get("stage_key_values", {})
+    canonical_key = str(compare_key)
+    drilldown: dict[str, pd.DataFrame] = {}
+
+    for stage in stages:
+        stage_name = _stage_name(stage)
+        raw_keys = stage_key_values.get(stage_name, {}).get(canonical_key, ())
+        if not raw_keys:
+            continue
+        if stage["schema"] == NOTEBOOK_SCHEMA:
+            frame = _load_notebook_record_rows(
+                source=notebook_tables[stage["table"]],
+                comparison_column=stage["comparison_column"],
+                timestamp_column=stage["timestamp_column"],
+                raw_keys=raw_keys,
+                lookback_days=lookback_days,
+            )
+        else:
+            frame = _load_database_record_rows(
+                engine=engine,
+                schema=stage["schema"],
+                table_name=stage["table"],
+                comparison_column=stage["comparison_column"],
+                timestamp_column=stage["timestamp_column"],
+                raw_keys=raw_keys,
+                lookback_days=lookback_days,
+            )
+        if not frame.empty:
+            drilldown[stage_name] = frame
+
+    return drilldown
 
 
 def empty_pipeline_result(stage_names: Sequence[str] = ()) -> pd.DataFrame:
@@ -556,6 +648,7 @@ def run_pipeline(
     stage_frames: list[pd.DataFrame] = []
     marker_columns: list[str] = []
     matching_warnings: list[str] = []
+    stage_key_values: dict[str, dict[str, tuple[str, ...]]] = {}
 
     for position, (stage, output_name) in enumerate(
         zip(stages, stage_names), start=1
@@ -584,7 +677,7 @@ def run_pipeline(
                 duplicate_policy=duplicate_policy,
                 lookback_days=lookback_days,
             )
-        frame, stage_warnings = _prepare_stage_keys(
+        frame, stage_warnings, raw_key_values = _prepare_stage_keys(
             frame,
             stage_name=output_name,
             output_name=output_name,
@@ -594,6 +687,7 @@ def run_pipeline(
         )
         stage_frames.append(frame)
         matching_warnings.extend(stage_warnings)
+        stage_key_values[output_name] = raw_key_values
 
     merged = reduce(
         lambda left, right: left.merge(
@@ -615,6 +709,7 @@ def run_pipeline(
         .reset_index(drop=True)
     )
     result.attrs["matching_warnings"] = matching_warnings
+    result.attrs["stage_key_values"] = stage_key_values
     return result, stage_names
 
 
