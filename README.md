@@ -183,14 +183,3 @@ To reuse a setup:
 Select a saved monitor from the **Saved monitor** list to load it. Saving with an existing name replaces that preset; **Delete** removes the selected preset.
 
 Presets are stored locally in `.sentinel/presets.json`. They include stage and query settings but do not include database credentials.
-
-## Troubleshooting
-
-- **No schemas or tables appear:** Check the connection values, network/VPN access, and database permissions, then restart Sentinel.
-- **Athena authentication fails:** Confirm that AWS credentials are available in the same terminal where Sentinel was started and that the region and permissions are correct.
-- **A stage reports missing fields:** Select a schema, table, comparison key, and timestamp for every stage.
-- **Duplicate stage-name error:** Enter unique optional stage names for tables that would otherwise produce the same result-column name.
-- **Keys differ only by filename extension or path:** Select **Normalize filename** for the affected stages.
-- **A key matching notice appears:** Review the listed raw values. Use **Exact** or a less aggressive strategy if they represent different records.
-- **Expected older records are missing:** Set **Lookback days** to `0` and run the monitor again.
-- **The browser page closes or stops responding:** Check that the terminal process is still running and reopen the local URL printed there.

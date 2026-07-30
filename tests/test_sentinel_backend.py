@@ -26,6 +26,14 @@ class KeyNormalizationTests(unittest.TestCase):
             "daily_report",
         )
 
+    def test_filename_normalization_handles_pdf_and_xlsm_extensions(self):
+        for filename in ("Report.PDF", "Report.XLSM"):
+            with self.subTest(filename=filename):
+                self.assertEqual(
+                    backend.normalize_comparison_key(filename, "filename"),
+                    "report",
+                )
+
     def test_unknown_normalization_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported"):
             backend.normalize_comparison_key("report", "unknown")
