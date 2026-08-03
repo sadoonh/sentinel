@@ -11,6 +11,7 @@ dependencies = [
     "pyathena[sqlalchemy]>=3.0",
     "botocore[crt]",
     "psycopg2-binary>=2.9",
+    "wigglystuff>=0.5.23",
 ]
 
 [tool.uv]

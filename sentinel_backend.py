@@ -624,6 +624,23 @@ def load_record_drilldown(
     return drilldown
 
 
+def transpose_drilldown_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    """Transpose full source rows into a vertical drilldown display."""
+    transposed = (
+        rows.reset_index(drop=True)
+        .transpose()
+        .rename_axis("field")
+        .reset_index()
+    )
+    value_columns = (
+        ["value"]
+        if len(rows) == 1
+        else [f"row {position}" for position in range(1, len(rows) + 1)]
+    )
+    transposed.columns = ["field", *value_columns]
+    return transposed
+
+
 def empty_pipeline_result(stage_names: Sequence[str] = ()) -> pd.DataFrame:
     """Create an empty result with the same columns as a completed run."""
     return pd.DataFrame(columns=["compare_column", *stage_names, "exists_in"])

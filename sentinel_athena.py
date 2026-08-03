@@ -9,9 +9,10 @@ def _():
     import importlib
     import marimo as mo
     import sentinel_backend
+    from wigglystuff import Hint
 
     backend = importlib.reload(sentinel_backend)
-    return backend, mo
+    return Hint, backend, mo
 
 
 @app.cell
@@ -838,6 +839,8 @@ def _(
 
 @app.cell
 def _(
+    Hint,
+    backend,
     drilldown_button,
     drilldown_error,
     drilldown_ran,
@@ -861,11 +864,44 @@ def _(
                 mo.md(f"**Drilldown failed**\n\n{drilldown_error}"), kind="danger"
             )
         elif drilldown_ran and drilldown_rows:
-            _drilldown_view = mo.ui.tabs(
-                {
-                    _stage_name: mo.ui.table(_rows, selection=None)
-                    for _stage_name, _rows in drilldown_rows.items()
-                }
+            _drilldown_panels = [
+                mo.vstack(
+                    [
+                        mo.md(f"**{_stage_name}**"),
+                        mo.ui.table(
+                            backend.transpose_drilldown_rows(_rows),
+                            selection=None,
+                            freeze_columns_left=["field"],
+                            show_data_types=False,
+                        ),
+                    ],
+                    gap=0.35,
+                )
+                for _stage_name, _rows in drilldown_rows.items()
+            ]
+            _panel_count = len(_drilldown_panels)
+            if _panel_count == 1:
+                _drilldown_items = [
+                    mo.md(""),
+                    _drilldown_panels[0],
+                    mo.md(""),
+                ]
+                _drilldown_widths = [1, 1, 1]
+            elif _panel_count == 2:
+                _drilldown_items = [
+                    mo.md(""),
+                    *_drilldown_panels,
+                    mo.md(""),
+                ]
+                _drilldown_widths = [0.5, 1, 1, 0.5]
+            else:
+                _drilldown_items = _drilldown_panels
+                _drilldown_widths = "equal"
+            _drilldown_view = mo.hstack(
+                _drilldown_items,
+                widths=_drilldown_widths,
+                align="start",
+                gap=1,
             )
         elif drilldown_ran:
             _drilldown_view = mo.callout(
@@ -874,12 +910,17 @@ def _(
         else:
             _drilldown_view = mo.md("")
 
+        _drilldown_hint = Hint(
+            drilldown_button,
+            "Click me!",
+            side="right",
+        )
         _table_view = mo.vstack(
             [
                 result_table,
                 mo.hstack(
-                    [drilldown_button, mo.md("")],
-                    widths=[0.5, 4.5],
+                    [_drilldown_hint, mo.md("")],
+                    widths=[1, 3],
                     align="start",
                 ),
                 _drilldown_view,

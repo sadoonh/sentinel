@@ -170,7 +170,7 @@ Sentinel outer-joins the stages, so records missing from later stages remain vis
 
 When normalization causes multiple raw keys in one stage to produce the same comparison key, Sentinel applies the selected duplicate-handling rule and displays a **Key matching notice** with examples. Review these notices to ensure distinct records were not combined unintentionally.
 
-Select one result row and choose **Drill down** to view its full source rows in each stage where the record exists. Use the **Visualize** tab for interactive exploration of the result data.
+Select one result row and choose **Drill down** to view its full source rows in each stage where the record exists. Drilldown tables are transposed vertically and displayed side by side for comparison. Use the **Visualize** tab for interactive exploration of the result data.
 
 ## Save a monitor configuration
 

@@ -119,6 +119,25 @@ class PipelineKeyMatchingTests(unittest.TestCase):
         self.assertEqual(drilldown["target"].loc[0, "detail"], "target detail")
         self.assertIsInstance(drilldown["source"].index, pd.RangeIndex)
 
+    def test_drilldown_rows_are_transposed_for_vertical_display(self):
+        rows = pd.DataFrame(
+            {
+                "file_name": ["Report.csv"],
+                "detail": ["source detail"],
+            }
+        )
+
+        transposed = backend.transpose_drilldown_rows(rows)
+
+        self.assertEqual(transposed.columns.tolist(), ["field", "value"])
+        self.assertEqual(
+            transposed.to_dict("records"),
+            [
+                {"field": "file_name", "value": "Report.csv"},
+                {"field": "detail", "value": "source detail"},
+            ],
+        )
+
     def test_normalization_collisions_are_aggregated_and_reported(self):
         self.notebook_tables["source"] = pd.DataFrame(
             {
